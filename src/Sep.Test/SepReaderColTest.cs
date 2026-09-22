@@ -1,0 +1,443 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace nietras.SeparatedValues.Test;
+
+[TestClass]
+public class SepReaderColTest
+{
+    const string ColName = "A";
+    const int ColValue = 123456;
+    const string ColText = "123456";
+    enum TestEnum { Aaaaaaaa, Bbbbbbbbbbbbbbb }
+    const TestEnum ColValueEnum = TestEnum.Bbbbbbbbbbbbbbb;
+    const string ColValueEnumText = nameof(TestEnum.Bbbbbbbbbbbbbbb);
+
+    [TestMethod]
+    public void SepReaderColTest_DebuggerDisplay()
+    {
+        Run(col => Assert.AreEqual(ColText, col.DebuggerDisplay));
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_Span()
+    {
+        Run(col => Assert.IsTrue(ColText.AsSpan().SequenceEqual(col.Span)));
+        Run(col => Assert.IsTrue(ReadOnlySpan<char>.Empty.SequenceEqual(col.Span)), "");
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_ImplicitSpanConversion()
+    {
+        Run(col =>
+        {
+            ReadOnlySpan<char> span = col;
+            Assert.IsTrue(ColText.AsSpan().SequenceEqual(span));
+        });
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_ToString()
+    {
+        Run(col => Assert.AreEqual(ColText, col.ToString()));
+        Run(col => Assert.AreSame(string.Empty, col.ToString()), "");
+        Run(col =>
+        {
+            var t1 = col.ToString();
+            Assert.AreEqual("1", t1);
+            var t2 = col.ToString();
+            Assert.AreSame(t1, t2);
+        }, "1");
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_ToStringDirect()
+    {
+        Run(col => Assert.AreEqual(ColText, col.ToStringDirect()));
+        Run(col => Assert.AreSame(string.Empty, col.ToString()), "");
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_Parse()
+    {
+        Run(col => Assert.AreEqual(ColValue, col.Parse<int>()));
+        AssertParseFloats(o => o);
+        AssertParseFloats(o => o with { DisableFastFloat = true });
+        AssertParseFloats(o => o with { CultureInfo = null, DisableFastFloat = true });
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_Parse_CultureInfo_MultiCharacterDecimalAndGroupSeparator()
+    {
+        var cultureInfoWithMultiCharacterGroupSeparator = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+        cultureInfoWithMultiCharacterGroupSeparator.NumberFormat.NumberGroupSeparator = "__";
+        cultureInfoWithMultiCharacterGroupSeparator.NumberFormat.NumberDecimalSeparator = "..";
+        Run(col => Assert.AreEqual(1234567.89f, col.Parse<float>()), "1__234__567..89",
+            o => o with { CultureInfo = cultureInfoWithMultiCharacterGroupSeparator });
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_TryParse_Return()
+    {
+        Run(col => Assert.AreEqual(ColValue, col.TryParse<int>()));
+        Run(col => Assert.IsNull(col.TryParse<int>()), "a");
+
+        AssertTryParseReturnFloats(o => o);
+        AssertTryParseReturnFloats(o => o with { DisableFastFloat = true });
+        AssertTryParseReturnFloats(o => o with { CultureInfo = null, DisableFastFloat = true });
+    }
+
+
+    [TestMethod]
+    public void SepReaderColTest_TryParse_Out()
+    {
+        Run(col => Assert.AreEqual((int?)ColValue, col.TryParse<int>(out var v) ? v : null));
+        Run(col => Assert.AreEqual((int?)default, col.TryParse<int>(out var v) ? v : null), "a");
+
+        AssertTryParseOutFloats(o => o);
+        AssertTryParseOutFloats(o => o with { DisableFastFloat = true });
+        AssertTryParseOutFloats(o => o with { CultureInfo = null, DisableFastFloat = true });
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_Parse_String()
+    {
+        Run(col => Assert.AreEqual(ColText, col.Parse<string>()));
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_TryParse_Out_String()
+    {
+        Run(col => Assert.AreEqual(ColText, col.TryParse<string>(out var v) ? v : null));
+    }
+
+    [TestMethod]
+    public void SepReaderColTest_EnumParse_ImplicitColToSpanConversion()
+    {
+        var text = $"{ColName}{Environment.NewLine}{ColValueEnumText}{Environment.NewLine}";
+        using var reader = Sep.Reader().FromText(text);
+        Assert.IsTrue(reader.MoveNext());
+        var row = reader.Current;
+        var col = row[ColName];
+        // SepReader.Col.Parse<T> does not support parsing enums, since enums do
+        // not implement ISpanParsable, but with the implicit conversion of Col
+        // to ReadOnlySpan<T> parsing via Enum.Parse is as short and easy as
+        // below. However, since SepWriter.Col has FormatEnum<T> due to
+        // performance reasons, to be consistent SepReader.Col also has
+        // ParseEnum<T> as tested below. Keeping this test and example to
+        // preserve reasoning.
+        Assert.AreEqual(ColValueEnum, Enum.Parse<TestEnum>(col));
+    }
+    [TestMethod]
+    public void SepReaderColTest_ParseEnum_Enum()
+    {
+        var text = $"{ColName}{Environment.NewLine}{ColValueEnumText}{Environment.NewLine}";
+        using var reader = Sep.Reader().FromText(text);
+        Assert.IsTrue(reader.MoveNext());
+        var col = reader.Current[ColName];
+        Assert.AreEqual(ColValueEnum, col.ParseEnum<TestEnum>());
+    }
+    [TestMethod]
+    public void SepReaderColTest_TryParseEnum_Enum()
+    {
+        var text = $"{ColName}{Environment.NewLine}{ColValueEnumText}{Environment.NewLine}";
+        using var reader = Sep.Reader().FromText(text);
+        Assert.IsTrue(reader.MoveNext());
+        var col = reader.Current[ColName];
+        Assert.IsTrue(col.TryParseEnum<TestEnum>(out var value));
+        Assert.AreEqual(ColValueEnum, value);
+    }
+
+    public static IEnumerable<object[]> UnescapeData => SepUnescapeTest.UnescapeData.Concat(
+        [
+            ["a\"\"a", "a\"\"a"],
+            ["a\"a\"a", "a\"a\"a"],
+            ["·\"\"·", "·\"\"·"],
+            ["·\"a\"·", "·\"a\"·"],
+            ["·\"\"", "·\"\""],
+            ["·\"a\"", "·\"a\""],
+            ["a\"\"\"a", "a\"\"\"a"],
+        ]);
+
+    [TestMethod]
+    [DynamicData(nameof(UnescapeData))]
+    public void SepReaderColTest_Unescape_Header_Test(string src, string expected)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = true, Unescape = true }).FromText(src);
+        var actual = reader.Header.ColNames[0];
+
+        Assert.AreEqual(expected, actual, src);
+    }
+
+    [TestMethod]
+    [DynamicData(nameof(UnescapeData))]
+    public void SepReaderColTest_Unescape_Col_Test(string src, string expectedCol)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = false, Unescape = true }).FromText(src);
+        AssertCol(reader, src, expectedCol);
+    }
+
+    public static IEnumerable<object[]> TrimOuterNoQuotesData =>
+    [
+        [" ", ""],
+        ["   ", ""],
+        ["a", "a"],
+        [" a", "a"],
+        ["a ", "a"],
+        [" a ", "a"],
+        [" a a ", "a a"],
+    ];
+
+    public static IEnumerable<object[]> TrimOuterQuotesData =>
+    [
+        ["\"a\"", "\"a\""],
+        [" \" a\"", "\" a\""],
+        ["\"a \" ", "\"a \""],
+        [" \" a \" ", "\" a \""],
+        [" \" a a \" ", "\" a a \""],
+    ];
+
+    public static IEnumerable<object[]> TrimOuterUnescapeData =>
+        TrimOuterNoQuotesData.Concat(
+    [
+        ["\"a\"", "a"],
+        [" \" a\" ", " a"],
+        [" \"a \"", "a "],
+        ["\" a \" ", " a "],
+        [" \" a a \" ", " a a "],
+    ]);
+
+    public static IEnumerable<object[]> UnescapeTrimAfterUnescapeQuotesData =>
+    [
+        ["\"a\"", "a"],
+        ["\" a\"", "a"],
+        ["\"a \"", "a"],
+        ["\" a \"", "a"],
+        ["\" a a \"", "a a"],
+        ["\"a \" ", "a"],
+        ["\"a \"  ", "a"],
+        ["\"a \"\"\"  ", "a \""],
+        ["\"\"\" a \"\"\"  ", "\" a \""],
+        ["\"  \"\" a \"\"  \"  ", "\" a \""],
+    ];
+
+    public static IEnumerable<object[]> UnescapeTrimAfterUnescapeData =>
+        UnescapeTrimAfterUnescapeQuotesData.Concat(
+    [
+        [" \"a \"", "\"a \""], // Not seen as quotes
+        [" \"a \" ", "\"a \""], // Not seen as quotes
+        [" \"a \"  ", "\"a \""], // Not seen as quotes
+    ]);
+
+    public static IEnumerable<object[]> TrimOuterData =>
+        TrimOuterNoQuotesData.Concat(TrimOuterQuotesData);
+
+    public static IEnumerable<object[]> TrimAllUnescapeData =>
+        TrimOuterNoQuotesData.Concat(UnescapeTrimAfterUnescapeQuotesData).Concat(
+    [
+        [" \"a\" ", "a"],
+        [" \" a\"", "a"],
+        ["\"a \" ", "a"],
+        [" \" a \" ", "a"],
+        [" \" a a \" ", "a a"],
+        [" \"   a  a   \" ", "a  a"],
+    ]);
+
+    [TestMethod]
+    [DynamicData(nameof(TrimOuterData))]
+    public void SepReaderColTest_TrimOuter_Header_Test(string src, string expected)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = true, Trim = SepTrim.Outer }).FromText(src);
+        var actual = reader.Header.ColNames[0];
+
+        Assert.AreEqual(expected, actual, src);
+    }
+    [TestMethod]
+    [DynamicData(nameof(TrimOuterData))]
+    public void SepReaderColTest_TrimOuter_Col_Test(string src, string expectedCol)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = false, Trim = SepTrim.Outer }).FromText(src);
+        AssertCol(reader, src, expectedCol);
+    }
+
+    [TestMethod]
+    [DynamicData(nameof(TrimOuterUnescapeData))]
+    public void SepReaderColTest_TrimOuterUnescape_Header_Test(string src, string expected)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = true, Unescape = true, Trim = SepTrim.Outer }).FromText(src);
+        var actual = reader.Header.ColNames[0];
+
+        Assert.AreEqual(expected, actual, src);
+    }
+    [TestMethod]
+    [DynamicData(nameof(TrimOuterUnescapeData))]
+    public void SepReaderColTest_TrimOuterUnescape_Col_Test(string src, string expectedCol)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = false, Unescape = true, Trim = SepTrim.Outer }).FromText(src);
+        AssertCol(reader, src, expectedCol);
+    }
+
+    [TestMethod]
+    [DynamicData(nameof(UnescapeTrimAfterUnescapeData))]
+    public void SepReaderColTest_TrimAfterUnescape_Header_Test(string src, string expected)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = true, Unescape = true, Trim = SepTrim.AfterUnescape }).FromText(src);
+        var actual = reader.Header.ColNames[0];
+
+        Assert.AreEqual(expected, actual, src);
+    }
+    [TestMethod]
+    [DynamicData(nameof(UnescapeTrimAfterUnescapeData))]
+    public void SepReaderColTest_TrimAfterUnescape_Col_Test(string src, string expectedCol)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = false, Unescape = true, Trim = SepTrim.AfterUnescape }).FromText(src);
+        AssertCol(reader, src, expectedCol);
+    }
+
+    [TestMethod]
+    [DynamicData(nameof(TrimAllUnescapeData))]
+    public void SepReaderColTest_TrimAllUnescape_Header_Test(string src, string expected)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = true, Unescape = true, Trim = SepTrim.All }).FromText(src);
+        var actual = reader.Header.ColNames[0];
+
+        Assert.AreEqual(expected, actual, src);
+    }
+    [TestMethod]
+    [DynamicData(nameof(TrimAllUnescapeData))]
+    public void SepReaderColTest_TrimAllUnescape_Col_Test(string src, string expectedCol)
+    {
+        using var reader = Sep.Reader(o => o with
+        { HasHeader = false, Unescape = true, Trim = SepTrim.All }).FromText(src);
+        AssertCol(reader, src, expectedCol);
+    }
+
+    static void AssertCol(SepReader reader, string src, string expectedCol)
+    {
+        Assert.IsTrue(reader.MoveNext());
+        // Ensure repeated access works
+        for (var i = 0; i < 4; i++)
+        {
+            var row = reader.Current;
+
+            var actualCol = row[0].ToString();
+            Assert.AreEqual(expectedCol, actualCol, src);
+
+            // Ensure row can be gotten and that expectedCol is contained
+            var rowText = row.Span.ToString();
+            Assert.Contains(expectedCol, rowText);
+        }
+    }
+
+    static void Run(SepReader.ColAction action, string colValue = ColText, Func<SepReaderOptions, SepReaderOptions>? configure = null)
+    {
+        Func<SepReaderOptions, SepReaderOptions> defaultConfigure = static c => c;
+        var useConfigure = configure ?? defaultConfigure;
+
+        var text = $"{ColName}{Environment.NewLine}{colValue}{Environment.NewLine}";
+        List<Func<SepReader>> createReaders = new()
+        {
+            () => Sep.Reader(useConfigure).FromText(text),
+            () => Sep.Default.Reader(useConfigure).FromText(text),
+            () => ((Sep?)null).Reader(useConfigure).FromText(text),
+            () => new SepSpec(Sep.Default, null, false).Reader(useConfigure).FromText(text),
+        };
+        if (configure is null)
+        {
+            createReaders.Add(() => new SepSpec(Sep.Default, null, false).Reader().FromText(text));
+        }
+
+        foreach (var createReader in createReaders)
+        {
+            using var reader = createReader();
+            Assert.IsTrue(reader.MoveNext());
+            var row = reader.Current;
+            action(row[ColName]);
+        }
+    }
+
+    static void AssertParseFloats(Func<SepReaderOptions, SepReaderOptions> configure)
+    {
+        Run(col => Assert.AreEqual(ColValue, col.Parse<float>()), ColText, configure: configure);
+        Run(col => Assert.AreEqual(1234567.89f, col.Parse<float>()), " 1234567.89 ", configure: configure);
+        Run(col => Assert.AreEqual(1234567.89f, col.Parse<float>()), " 1,234,567.89 ", configure: configure);
+        Run(col => Assert.AreEqual(1234567.89f, col.Parse<float>()), "1,234,567.89", configure: configure);
+        Run(col => Assert.AreEqual(float.NaN, col.Parse<float>()), "NaN", configure: configure);
+        Run(col => Assert.AreEqual(float.NaN, col.Parse<float>()), "+NaN", configure: configure);
+        Run(col => Assert.AreEqual(float.NaN, col.Parse<float>()), "-NaN", configure: configure);
+        Run(col => Assert.AreEqual(float.PositiveInfinity, col.Parse<float>()), "Infinity", configure: configure);
+        Run(col => Assert.AreEqual(float.NegativeInfinity, col.Parse<float>()), "-Infinity", configure: configure);
+
+        Run(col => Assert.AreEqual(ColValue, col.Parse<double>()), ColText, configure: configure);
+        Run(col => Assert.AreEqual(1234567.89, col.Parse<double>()), " 1234567.89 ", configure: configure);
+        Run(col => Assert.AreEqual(1234567.89, col.Parse<double>()), " 1,234,567.89 ", configure: configure);
+        Run(col => Assert.AreEqual(1234567.89, col.Parse<double>()), "1,234,567.89", configure: configure);
+        Run(col => Assert.AreEqual(double.NaN, col.Parse<double>()), "NaN", configure: configure);
+        Run(col => Assert.AreEqual(double.NaN, col.Parse<double>()), "+NaN", configure: configure);
+        Run(col => Assert.AreEqual(double.NaN, col.Parse<double>()), "-NaN", configure: configure);
+        Run(col => Assert.AreEqual(double.PositiveInfinity, col.Parse<double>()), "Infinity", configure: configure);
+        Run(col => Assert.AreEqual(double.NegativeInfinity, col.Parse<double>()), "-Infinity", configure: configure);
+    }
+
+    static void AssertTryParseReturnFloats(Func<SepReaderOptions, SepReaderOptions> configure)
+    {
+        Run(col => Assert.AreEqual(ColValue, col.TryParse<float>()), ColText, configure: configure);
+        Run(col => Assert.AreEqual(1234567.89f, col.TryParse<float>()), " 1234567.89 ", configure: configure);
+        Run(col => Assert.AreEqual(1234567.89f, col.TryParse<float>()), " 1,234,567.89 ", configure: configure);
+        Run(col => Assert.AreEqual(1234567.89f, col.TryParse<float>()), "1,234,567.89", configure: configure);
+        Run(col => Assert.AreEqual(float.NaN, col.TryParse<float>()), "NaN", configure: configure);
+        Run(col => Assert.AreEqual(float.NaN, col.TryParse<float>()), "+NaN", configure: configure);
+        Run(col => Assert.AreEqual(float.NaN, col.TryParse<float>()), "-NaN", configure: configure);
+        Run(col => Assert.AreEqual(float.PositiveInfinity, col.TryParse<float>()), "Infinity", configure: configure);
+        Run(col => Assert.AreEqual(float.NegativeInfinity, col.TryParse<float>()), "-Infinity", configure: configure);
+        Run(col => Assert.IsNull(col.TryParse<float>()), "a", configure: configure);
+
+        Run(col => Assert.AreEqual(ColValue, col.TryParse<double>()), ColText, configure: configure);
+        Run(col => Assert.AreEqual(1234567.89, col.TryParse<double>()), " 1234567.89 ", configure: configure);
+        Run(col => Assert.AreEqual(1234567.89, col.TryParse<double>()), " 1,234,567.89 ", configure: configure);
+        Run(col => Assert.AreEqual(1234567.89, col.TryParse<double>()), "1,234,567.89", configure: configure);
+        Run(col => Assert.AreEqual(double.NaN, col.TryParse<double>()), "NaN", configure: configure);
+        Run(col => Assert.AreEqual(double.NaN, col.TryParse<double>()), "+NaN", configure: configure);
+        Run(col => Assert.AreEqual(double.NaN, col.TryParse<double>()), "-NaN", configure: configure);
+        Run(col => Assert.AreEqual(double.PositiveInfinity, col.TryParse<double>()), "Infinity", configure: configure);
+        Run(col => Assert.AreEqual(double.NegativeInfinity, col.TryParse<double>()), "-Infinity", configure: configure);
+        Run(col => Assert.IsNull(col.TryParse<double>()), "a", configure: configure);
+    }
+
+    static void AssertTryParseOutFloats(Func<SepReaderOptions, SepReaderOptions> configure)
+    {
+        Run(col => Assert.AreEqual((float?)ColValue, col.TryParse<float>(out var v) ? v : null), configure: configure);
+        Run(col => Assert.AreEqual((float?)1234567.89, col.TryParse<float>(out var v) ? v : null), " 1234567.89 ", configure: configure);
+        Run(col => Assert.AreEqual((float?)1234567.89, col.TryParse<float>(out var v) ? v : null), " 1,234,567.89 ", configure: configure);
+        Run(col => Assert.AreEqual((float?)1234567.89, col.TryParse<float>(out var v) ? v : null), "1,234,567.89", configure: configure);
+        Run(col => Assert.AreEqual((float?)default, col.TryParse<float>(out var v) ? v : null), "a", configure: configure);
+        Run(col => Assert.AreEqual((float?)float.NaN, col.TryParse<float>(out var v) ? v : null), "NaN", configure: configure);
+        Run(col => Assert.AreEqual((float?)float.NaN, col.TryParse<float>(out var v) ? v : null), "+NaN", configure: configure);
+        Run(col => Assert.AreEqual((float?)float.NaN, col.TryParse<float>(out var v) ? v : null), "-NaN", configure: configure);
+        Run(col => Assert.AreEqual((float?)float.PositiveInfinity, col.TryParse<float>(out var v) ? v : null), "Infinity", configure: configure);
+        Run(col => Assert.AreEqual((float?)float.NegativeInfinity, col.TryParse<float>(out var v) ? v : null), "-Infinity", configure: configure);
+
+        Run(col => Assert.AreEqual((double?)ColValue, col.TryParse<double>(out var v) ? v : null), configure: configure);
+        Run(col => Assert.AreEqual((double?)1234567.89, col.TryParse<double>(out var v) ? v : null), " 1234567.89 ", configure: configure);
+        Run(col => Assert.AreEqual((double?)1234567.89, col.TryParse<double>(out var v) ? v : null), " 1,234,567.89 ", configure: configure);
+        Run(col => Assert.AreEqual((double?)1234567.89, col.TryParse<double>(out var v) ? v : null), "1,234,567.89", configure: configure);
+        Run(col => Assert.AreEqual((double?)default, col.TryParse<double>(out var v) ? v : null), "a", configure: configure);
+        Run(col => Assert.AreEqual((double?)double.NaN, col.TryParse<double>(out var v) ? v : null), "NaN", configure: configure);
+        Run(col => Assert.AreEqual((double?)double.NaN, col.TryParse<double>(out var v) ? v : null), "+NaN", configure: configure);
+        Run(col => Assert.AreEqual((double?)double.NaN, col.TryParse<double>(out var v) ? v : null), "-NaN", configure: configure);
+        Run(col => Assert.AreEqual((double?)double.PositiveInfinity, col.TryParse<double>(out var v) ? v : null), "Infinity", configure: configure);
+        Run(col => Assert.AreEqual((double?)double.NegativeInfinity, col.TryParse<double>(out var v) ? v : null), "-Infinity", configure: configure);
+    }
+}

@@ -1,0 +1,167 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace nietras.SeparatedValues;
+
+[DebuggerDisplay("{DebuggerDisplay,nq}")]
+public sealed partial class SepWriter : IDisposable
+    , IAsyncDisposable
+{
+    internal delegate string DebuggerDisplayFunc(Info info, TextWriter writer);
+    internal readonly record struct Info(object Source, DebuggerDisplayFunc DebuggerDisplay);
+    internal string DebuggerDisplay => _info.DebuggerDisplay(_info, _writer);
+
+    const int DefaultCapacity = 16;
+    readonly Info _info;
+    readonly Sep _sep;
+    readonly CultureInfo? _cultureInfo;
+    internal readonly bool _writeHeader;
+    readonly bool _disableColCountCheck;
+    readonly SepColNotSetOption _colNotSetOption;
+    readonly bool _escape;
+    readonly bool _continueOnCapturedContext;
+    // _writer dispose handled by _disposeTextWriter
+#pragma warning disable CA2213 // Disposable fields should be disposed
+    readonly TextWriter _writer;
+#pragma warning restore CA2213 // Disposable fields should be disposed
+    readonly ISepTextWriterDisposer _textWriterDisposer;
+    internal readonly List<(string ColName, int ColIndex)> _colNameCache = new(DefaultCapacity);
+
+    internal readonly Dictionary<string, ColImpl> _colNameToCol = new(DefaultCapacity);
+    // Once header is written cols cannot be added or removed
+    internal List<ColImpl> _cols = new(DefaultCapacity);
+    internal string[] _colNamesHeader = Array.Empty<string>();
+
+    internal readonly SepArrayPoolAccessIndexed _arrayPool = new();
+    internal bool _headerWrittenOrSkipped = false;
+    internal int _headerOrFirstRowColCount = -1;
+    bool _newRowActive = false;
+    CancellationToken _newRowCancellationToken = CancellationToken.None;
+    int _cacheIndex = 0;
+
+    internal SepWriter(Info info, in SepWriterOptions options,
+        TextWriter writer, ISepTextWriterDisposer textWriterDisposer)
+    {
+        _info = info;
+        _sep = options.Sep;
+        _cultureInfo = options.CultureInfo;
+        _writeHeader = options.WriteHeader;
+        _disableColCountCheck = options.DisableColCountCheck;
+        _colNotSetOption = options.ColNotSetOption;
+        _escape = options.Escape;
+        _continueOnCapturedContext = options.AsyncContinueOnCapturedContext;
+        _writer = writer;
+        _textWriterDisposer = textWriterDisposer;
+        Header = new(this);
+    }
+
+    public SepSpec Spec => new(_sep, _cultureInfo, _continueOnCapturedContext);
+    public SepWriterHeader Header { get; }
+
+    public Row NewRow()
+    {
+        PrepareNewRow();
+        return new(this);
+    }
+
+    public Row NewRow(CancellationToken cancellationToken)
+    {
+        PrepareNewRow();
+        _newRowCancellationToken = cancellationToken;
+        return new(this);
+    }
+
+    public override string ToString()
+    {
+        if (_writer is StringWriter stringWriter)
+        {
+            return stringWriter.ToString();
+        }
+        SepThrow.NotSupportedException_ToStringOnNotStringWriter(_writer);
+        return null;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void PrepareNewRow()
+    {
+        if (_newRowActive) { SepThrow.InvalidOperationException_WriterAlreadyHasActiveRow(); }
+        _newRowActive = true;
+        A.Assert(_newRowCancellationToken == CancellationToken.None);
+        _cacheIndex = 0;
+        _arrayPool.Reset();
+        foreach (var col in _cols) { col.Clear(); }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static uint ContainsSpecialCharacters(ReadOnlySpan<char> span, char separator)
+    {
+        foreach (var c in span)
+        {
+            var se = c == separator ? 1u : 0u;
+            var qe = c == SepDefaults.Quote ? 1u : 0u;
+            var ce = c == SepDefaults.CarriageReturn ? 1u : 0u;
+            var le = c == SepDefaults.LineFeed ? 1u : 0u;
+            var containsSpecialChar = (se | qe) | (ce | le);
+            if (containsSpecialChar != 0) { return 1; }
+        }
+        return 0;
+
+        // http://0x80.pl/notesen/2023-03-06-swar-find-any.html
+        // Tried adopting to 16-bit char (only little endian) (DOES NOT WORK)
+        //var specialCharacters = (ulong)separator << 48 | SepDefaults.Quote << 32 | SepDefaults.CarriageReturn << 16 | SepDefaults.LineFeed;
+        //foreach (var c in span)
+        //{
+        //    var broadcast = Broadcast(c);
+        //    var compare = broadcast ^ specialCharacters; // Zero if equal since XOR
+        //    var hasZero = HasZero(compare);
+        //    if (hasZero != 0)
+        //    {
+        //        return 1u;
+        //    }
+        //}
+        //return 0u;
+        //[MethodImpl(MethodImplOptions.AggressiveInlining)]
+        //static ulong Broadcast(char c) => 0x0001000100010001ul * c;
+        //[MethodImpl(MethodImplOptions.AggressiveInlining)]
+        //static ulong HasZero(ulong v) => ((v - 0x0001000100010001ul) & ~(v) & 0x8000800080008000);
+        //[MethodImpl(MethodImplOptions.AggressiveInlining)]
+        //static ulong IndexOfFirstSet(ulong v) => ((((v - 1) & 0x0001000100010001ul) * 0x0001000100010001ul) >> 60) - 1;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        if (_disposed) { return ValueTask.CompletedTask; }
+        _disposed = true;
+        GC.SuppressFinalize(this);
+        return DisposeManagedAsync(default);
+    }
+
+    #region Dispose
+    bool _disposed;
+    void Dispose(bool disposing)
+    {
+        if (!_disposed)
+        {
+            if (disposing)
+            {
+                DisposeManaged();
+            }
+
+            _disposed = true;
+        }
+    }
+
+    public void Dispose()
+    {
+        // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+    #endregion Dispose
+}
