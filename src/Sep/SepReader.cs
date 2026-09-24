@@ -32,6 +32,7 @@ public sealed partial class SepReader : SepReaderState
     readonly Info _info;
     char _separator;
     readonly bool _disableQuotesParsing;
+    readonly Func<SepParserOptions, ISepParser>? _createParser;
     internal readonly bool _continueOnCapturedContext;
     readonly TextReader _reader;
     readonly ISepTextReaderDisposer _textReaderDisposer;
@@ -50,6 +51,7 @@ public sealed partial class SepReader : SepReaderState
         _cultureInfo = options.CultureInfo;
         _createToString = options.CreateToString;
         _disableQuotesParsing = options.DisableQuotesParsing;
+        _createParser = options.CreateParser;
         _continueOnCapturedContext = options.AsyncContinueOnCapturedContext;
         _arrayPool = new();
 
@@ -72,7 +74,7 @@ public sealed partial class SepReader : SepReaderState
         var sep = options.Sep;
         if (sep.HasValue)
         {
-            _parser = SepParserFactory.CreateBest(new(sep.Value, _disableQuotesParsing));
+            _parser = CreateParser(new(sep.Value, _disableQuotesParsing));
             _charsPaddingLength = _parser.PaddingLength;
             _separator = sep.Value.Separator;
         }
@@ -209,10 +211,13 @@ public sealed partial class SepReader : SepReaderState
         {
             var sep = maybeSep.Value;
             _separator = sep.Separator;
-            _parser = SepParserFactory.CreateBest(new(sep, _disableQuotesParsing));
+            _parser = CreateParser(new(sep, _disableQuotesParsing));
             _charsPaddingLength = _parser.PaddingLength;
         }
     }
+
+    ISepParser CreateParser(SepParserOptions options) =>
+        (_createParser ?? SepParserFactory.CreateBest)(options);
 
     [ExcludeFromCodeCoverage]
     [Conditional(TraceCondition), Conditional(AssertCondition)]

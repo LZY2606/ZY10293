@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Globalization;
 
 namespace nietras.SeparatedValues;
@@ -108,4 +109,8 @@ public readonly record struct SepReaderOptions
     /// similar when async methods are called.
     /// </summary>
     public bool AsyncContinueOnCapturedContext { get; init; } = false;
+
+    // Internal for testing only, allows forcing a specific parser e.g. for
+    // differential testing of all parser backends. Not part of public API.
+    internal Func<SepParserOptions, ISepParser>? CreateParser { get; init; } = null;
 }
